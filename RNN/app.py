@@ -97,18 +97,18 @@ model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=10, batch_s
 loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
 print(f"Test Accuracy: {accuracy*100:.2f}%")
 
-# ======================
+
 # 7. Prediction Function
-# ======================
+
 def predict_sentiment(text):
     seq = tokenizer.texts_to_sequences([text])
     pad_seq = pad_sequences(seq, maxlen=max_len, padding='post')
     pred = model.predict(pad_seq)[0][0]
     return "Positive 😀" if pred > 0.5 else "Negative 😡"
 
-# ======================
+
 # 8. Test with Random Input
-# ======================
+
 print(predict_sentiment("I am very happy with the product, it works great!"))
 print(predict_sentiment("This is the worst service I have ever experienced."))
 
@@ -121,3 +121,5 @@ while True:
         break
     sentiment = predict_sentiment(user_input)
     print(f"Sentiment: {sentiment}")
+
+# 
