@@ -14,12 +14,10 @@ import tensorflow as tf
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.models import Sequential
+# MODIFICATION: Import the Bidirectional layer
 from tensorflow.keras.layers import Embedding, LSTM, GRU, Dense, Dropout, Bidirectional
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.utils import to_categorical
-
-# Keras Tuner for hyperparameter optimization
-
 import keras_tuner as kt
 
 print("TensorFlow Version:", tf.__version__)
@@ -144,11 +142,6 @@ corpus_data = [
 
 df = pd.DataFrame(corpus_data)
 
-print("Corpus Head:")
-print(df.head())
-print("\nClass Distribution:")
-print(df['sentiment_label'].value_counts(normalize=True) * 100)
-
 # ==============================================================================
 # 3. DATA PREPROCESSING AND SPLITTING
 # ==============================================================================
@@ -164,7 +157,7 @@ df['cleaned_text'] = df['text'].apply(preprocess_text)
 label_encoder = LabelEncoder()
 df['sentiment_encoded'] = label_encoder.fit_transform(df['sentiment_label'])
 # Positive: 2, Neutral: 1, Negative: 0
-print("\nLabel Mapping:", {i: label for i, label in enumerate(label_encoder.classes_)})
+print("Label Mapping:", {i: label for i, label in enumerate(label_encoder.classes_)})
 
 
 # Split data (70% train, 15% validation, 15% test)
@@ -176,14 +169,9 @@ X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_
 # Second split: 15% val, 15% test from the temp set
 X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp)
 
-print(f"\nTraining set size: {len(X_train)}")
-print(f"Validation set size: {len(X_val)}")
-print(f"Test set size: {len(X_test)}")
-
 # ==============================================================================
 # 4. TOKENIZATION AND PADDING
 # ==============================================================================
-# Hyperparameters for tokenization and padding
 vocab_size = 5000
 oov_tok = "<OOV>"
 max_length = 20
@@ -194,17 +182,14 @@ tokenizer = Tokenizer(num_words=vocab_size, oov_token=oov_tok)
 tokenizer.fit_on_texts(X_train)
 word_index = tokenizer.word_index
 
-# Convert text to sequences
 X_train_seq = tokenizer.texts_to_sequences(X_train)
 X_val_seq = tokenizer.texts_to_sequences(X_val)
 X_test_seq = tokenizer.texts_to_sequences(X_test)
 
-# Pad sequences
 X_train_pad = pad_sequences(X_train_seq, maxlen=max_length, padding=padding_type, truncating=trunc_type)
 X_val_pad = pad_sequences(X_val_seq, maxlen=max_length, padding=padding_type, truncating=trunc_type)
 X_test_pad = pad_sequences(X_test_seq, maxlen=max_length, padding=padding_type, truncating=trunc_type)
 
-# One-hot encode the labels for the categorical crossentropy loss function
 y_train_cat = to_categorical(y_train, num_classes=3)
 y_val_cat = to_categorical(y_val, num_classes=3)
 y_test_cat = to_categorical(y_test, num_classes=3)
@@ -237,147 +222,119 @@ if embeddings_index:
     print("\nGloVe embedding matrix created.")
 
 # ==============================================================================
-# 6. HYPERPARAMETER OPTIMIZATION with Keras Tuner
+# 6. HYPERPARAMETER OPTIMIZATION (with improved model architecture)
 # ==============================================================================
-def build_model(hp, rnn_type='lstm'):
-    """Model builder for Keras Tuner."""
+def build_model_improved(hp, rnn_type='lstm'):
+    """IMPROVED model builder for Keras Tuner."""
     model = Sequential()
     
     # Embedding Layer
     if embeddings_index:
-      # Use pre-trained GloVe embeddings
+      # MODIFICATION 1: Set trainable=True to fine-tune embeddings
       model.add(Embedding(len(word_index) + 1,
                           embedding_dim,
                           weights=[embedding_matrix],
                           input_length=max_length,
-                          trainable=False))
+                          trainable=True))
     else:
-      # Train embeddings from scratch if GloVe is not available
       model.add(Embedding(len(word_index) + 1,
                           embedding_dim,
                           input_length=max_length))
 
-    # RNN Layer (LSTM or GRU)
-    rnn_units = hp.Choice('rnn_units', values=[32, 64, 128])
+    # RNN Layer
+    rnn_units = hp.Choice('rnn_units', values=[32, 64])
+
+    # MODIFICATION 2: Use Bidirectional wrapper for the RNN layer
     if rnn_type.lower() == 'lstm':
-        model.add(LSTM(units=rnn_units))
+        model.add(Bidirectional(LSTM(units=rnn_units)))
     elif rnn_type.lower() == 'gru':
-        model.add(GRU(units=rnn_units))
+        model.add(Bidirectional(GRU(units=rnn_units)))
 
     # Dropout Layer
-    dropout_rate = hp.Float('dropout_rate', min_value=0.2, max_value=0.5, step=0.1)
+    dropout_rate = hp.Float('dropout_rate', min_value=0.3, max_value=0.6, step=0.1)
     model.add(Dropout(dropout_rate))
 
     # Dense Layer
-    dense_units = hp.Choice('dense_units', values=[16, 32, 64])
+    dense_units = hp.Choice('dense_units', values=[32, 64])
     model.add(Dense(units=dense_units, activation='relu'))
     
     # Output Layer
     model.add(Dense(3, activation='softmax'))
 
     # Compile the model
-    learning_rate = hp.Choice('learning_rate', values=[1e-2, 1e-3, 1e-4])
-    optimizer_choice = hp.Choice('optimizer', values=['adam', 'rmsprop'])
-    
-    if optimizer_choice == 'adam':
-        optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
-    else:
-        optimizer = tf.keras.optimizers.RMSprop(learning_rate=learning_rate)
+    # MODIFICATION 3: Favor a lower learning rate, which is better for fine-tuning
+    learning_rate = hp.Choice('learning_rate', values=[1e-3, 1e-4])
+    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
 
     model.compile(loss='categorical_crossentropy', optimizer=optimizer, metrics=['accuracy'])
     return model
 
 # --- LSTM Tuner ---
 lstm_tuner = kt.RandomSearch(
-    lambda hp: build_model(hp, rnn_type='lstm'),
+    lambda hp: build_model_improved(hp, rnn_type='lstm'),
     objective='val_accuracy',
-    max_trials=5,  # Number of hyperparameter combinations to try
+    max_trials=5,
     executions_per_trial=1,
-    directory='tuner_results',
-    project_name='lstm_sentiment'
+    directory='tuner_results_improved',
+    project_name='lstm_sentiment_improved'
 )
 
 # --- GRU Tuner ---
 gru_tuner = kt.RandomSearch(
-    lambda hp: build_model(hp, rnn_type='gru'),
+    lambda hp: build_model_improved(hp, rnn_type='gru'),
     objective='val_accuracy',
     max_trials=5,
     executions_per_trial=1,
-    directory='tuner_results',
-    project_name='gru_sentiment'
+    directory='tuner_results_improved',
+    project_name='gru_sentiment_improved'
 )
 
-# Start the search (using a small number of epochs for speed)
-print("\n--- Starting Hyperparameter Search for LSTM ---")
-lstm_tuner.search(X_train_pad, y_train_cat, epochs=10, validation_data=(X_val_pad, y_val_cat))
-print("\n--- Starting Hyperparameter Search for GRU ---")
-gru_tuner.search(X_train_pad, y_train_cat, epochs=10, validation_data=(X_val_pad, y_val_cat))
+print("\n--- Starting Hyperparameter Search for IMPROVED LSTM ---")
+lstm_tuner.search(X_train_pad, y_train_cat, epochs=15, validation_data=(X_val_pad, y_val_cat))
+print("\n--- Starting Hyperparameter Search for IMPROVED GRU ---")
+gru_tuner.search(X_train_pad, y_train_cat, epochs=15, validation_data=(X_val_pad, y_val_cat))
 
-# Get the best hyperparameters
 best_lstm_hp = lstm_tuner.get_best_hyperparameters(num_trials=1)[0]
 best_gru_hp = gru_tuner.get_best_hyperparameters(num_trials=1)[0]
 
-print("\n--- Best Hyperparameters Found ---")
-print(f"LSTM: Units={best_lstm_hp.get('rnn_units')}, Dropout={best_lstm_hp.get('dropout_rate'):.2f}, LR={best_lstm_hp.get('learning_rate')}, Optimizer={best_lstm_hp.get('optimizer')}")
-print(f"GRU: Units={best_gru_hp.get('rnn_units')}, Dropout={best_gru_hp.get('dropout_rate'):.2f}, LR={best_gru_hp.get('learning_rate')}, Optimizer={best_gru_hp.get('optimizer')}")
+print("\n--- Best Hyperparameters Found for Improved Models ---")
+print(f"LSTM: Units={best_lstm_hp.get('rnn_units')}, Dropout={best_lstm_hp.get('dropout_rate'):.2f}, LR={best_lstm_hp.get('learning_rate')}")
+print(f"GRU: Units={best_gru_hp.get('rnn_units')}, Dropout={best_gru_hp.get('dropout_rate'):.2f}, LR={best_gru_hp.get('learning_rate')}")
 
 # ==============================================================================
 # 7. FINAL MODEL TRAINING AND EVALUATION
 # ==============================================================================
-# Build the best models with the optimal hyperparameters
 best_lstm_model = lstm_tuner.hypermodel.build(best_lstm_hp)
 best_gru_model = gru_tuner.hypermodel.build(best_gru_hp)
 
-# Callbacks
-early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
 
-# --- Train Best LSTM Model ---
-print("\n--- Training Best LSTM Model ---")
+print("\n--- Training Best IMPROVED LSTM Model ---")
 history_lstm = best_lstm_model.fit(
     X_train_pad, y_train_cat,
-    epochs=50,
+    epochs=100,
     validation_data=(X_val_pad, y_val_cat),
     callbacks=[early_stopping],
-    verbose=2
+    verbose=0 # Set to 0 to reduce log spam
 )
 
-# --- Train Best GRU Model ---
-print("\n--- Training Best GRU Model ---")
+print("\n--- Training Best IMPROVED GRU Model ---")
 history_gru = best_gru_model.fit(
     X_train_pad, y_train_cat,
-    epochs=50,
+    epochs=100,
     validation_data=(X_val_pad, y_val_cat),
     callbacks=[early_stopping],
-    verbose=2
+    verbose=0
 )
 
-# Helper function to plot training history
-def plot_history(history, title):
-    plt.figure(figsize=(12, 4))
-    plt.subplot(1, 2, 1)
-    plt.plot(history.history['accuracy'], label='Train Accuracy')
-    plt.plot(history.history['val_accuracy'], label='Val Accuracy')
-    plt.title(f'{title} - Accuracy')
-    plt.legend()
-    plt.subplot(1, 2, 2)
-    plt.plot(history.history['loss'], label='Train Loss')
-    plt.plot(history.history['val_loss'], label='Val Loss')
-    plt.title(f'{title} - Loss')
-    plt.legend()
-    plt.show()
-
-plot_history(history_lstm, "LSTM Model Training")
-plot_history(history_gru, "GRU Model Training")
-
+print("Training complete.")
 
 # --- Evaluate on Test Set ---
 def evaluate_model(model, model_name):
     print(f"\n--- Evaluating {model_name} on Test Set ---")
-    # Get predictions
     y_pred_probs = model.predict(X_test_pad)
     y_pred = np.argmax(y_pred_probs, axis=1)
 
-    # Calculate metrics
     accuracy = accuracy_score(y_test, y_pred)
     report = classification_report(y_test, y_pred, target_names=label_encoder.classes_)
     
@@ -385,7 +342,6 @@ def evaluate_model(model, model_name):
     print("Classification Report:")
     print(report)
 
-    # Plot Confusion Matrix
     cm = confusion_matrix(y_test, y_pred)
     plt.figure(figsize=(6, 5))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
@@ -396,5 +352,5 @@ def evaluate_model(model, model_name):
     plt.ylabel('True Label')
     plt.show()
 
-evaluate_model(best_lstm_model, "Optimized LSTM Model")
-evaluate_model(best_gru_model, "Optimized GRU Model")
+evaluate_model(best_lstm_model, "Improved Bi-LSTM Model")
+evaluate_model(best_gru_model, "Improved Bi-GRU Model")
